@@ -6,10 +6,9 @@ import subprocess
 import tornado.ioloop
 import tornado.web
 
-import schedule
-
 dir_path = os.path.dirname(os.path.realpath(__file__))
 
+last_develop = ''
 current_task = None
 tasks = []
 results = []
@@ -70,7 +69,6 @@ def start_next():
     if not tasks:
         return
 
-
     current_task = tasks.pop(0)
     try:
         os.makedirs(current_task.dirname)
@@ -79,10 +77,9 @@ def start_next():
 
     out = open(os.path.join(current_task.dirname, 'out.txt'), 'w')
     current_task.process = tornado.process.Subprocess(
-        ['/bin/bash', 'run_test.sh', current_task.branch],
+        ['/bin/bash', 'run_test.sh', current_task.branch, current_task.dirname, last_develop],
         stderr=out, stdout=out)
     current_task.process.set_exit_callback(on_done)
-
 
 def on_done(args):
     global current_task
@@ -95,7 +92,7 @@ def on_done(args):
 class MainHandler(tornado.web.RequestHandler):
     def get(self):
         global current_task
-        results_str = ''.join( '<li>{}</li>'.format(task.render()) for task in results)
+        results_str = ''.join( '<li>{}</li>'.format(task.render()) for task in reversed(results))
         queued_str = ''.join( '<li>{}</li>'.format(task) for task in tasks)
 
         if current_task is not None:
