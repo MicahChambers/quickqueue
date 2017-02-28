@@ -14,10 +14,11 @@ tasks = []
 results = []
 
 class Task:
-    def __init__(self, name, branch):
+    def __init__(self, name, branch, clean=True):
         self.name = name
         self.branch = branch
         self.stats = ''
+        self.clean = clean
         self.time = datetime.now().isoformat()
 
     def __repr__(self):
@@ -45,6 +46,7 @@ template = """
 <form action="/submit" method="post" id="form1">
   Name: <input type="text" name="name">
   Branch: <input type="text" name="branch">
+  Clean? <input type="checkbox" name="clean">
 </form>
 <button type="submit" form="form1" value="Submit">Submit</button>
 
@@ -76,7 +78,8 @@ def start_next():
 
     out = open(os.path.join(current_task.dirname, 'out.txt'), 'w')
     current_task.process = tornado.process.Subprocess(
-        ['/bin/bash', 'run_test.sh', current_task.branch, current_task.dirname, last_develop],
+        ['/bin/bash', 'run_test.sh', current_task.branch, current_task.dirname,
+         last_develop, str(current_task.clean)],
         stderr=out, stdout=out)
     current_task.process.set_exit_callback(on_done)
 
@@ -106,9 +109,10 @@ class SubmitHandler(tornado.web.RequestHandler):
         global current_task
         request = self.request.arguments
         if 'branch' not in request or 'name' not in request:
-            abort(400)
+            raise tornado.web.HTTPError(400)
 
-        task = Task(request['name'][0], request['branch'][0])
+        clean = 'clean' in request
+        task = Task(request['name'][0], request['branch'][0], clean)
         tasks.append(task)
 
         if current_task is None:
