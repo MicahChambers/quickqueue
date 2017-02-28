@@ -27,7 +27,6 @@ class Task:
         return "{} ({})".format(self.name, self.branch)
 
     def render(self):
-        print("Rendering")
         out = '{} ({})  <a href={}>output</a> <br>'.format(
                 self.name, self.branch, self.dirname + '/out.txt')
         out = out + self.stats
@@ -92,6 +91,7 @@ def on_done(args):
 class MainHandler(tornado.web.RequestHandler):
     def get(self):
         global current_task
+        print('Last Develop: {}'.format(last_develop))
         results_str = ''.join( '<li>{}</li>'.format(task.render()) for task in reversed(results))
         queued_str = ''.join( '<li>{}</li>'.format(task) for task in tasks)
 
@@ -148,6 +148,11 @@ if __name__ == "__main__":
                 results.append(old_task)
 
     results = sorted(results, key=lambda task: task.time)
+    for result in reversed(results):
+        if result.branch == 'develop':
+            last_develop = result.dirname
+            break
+
     print("Loaded: {}".format(results))
 
     app = tornado.web.Application([
@@ -155,7 +160,8 @@ if __name__ == "__main__":
         (r"/submit", SubmitHandler),
         (r'/output/(.*)', FileHandler),
 
-    ], autoreload=True)
+    ])
+    #], autoreload=True)
 
     app.listen(8888)
     tornado.ioloop.IOLoop.current().start()

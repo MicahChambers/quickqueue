@@ -15,7 +15,8 @@ git pull || true
 
 cd ros
 catkin clean --all -y || true
-catkin build 
+catkin build --no-status --summarize --no-notify -DCRUISE_ENABLE_ASSERTIONS=ON
+source ~/.bashrc
 
 #for xx in ~/cruise/ros/src/regression_testing/testsuites/{full,smoke,staging}/*.yaml; do 
 for xx in ~/cruise/ros/src/regression_testing/testsuites/smoke/general-00.yaml; do 
