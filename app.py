@@ -18,8 +18,8 @@ class Task:
     def __init__(self, name, branch):
         self.name = name
         self.branch = branch
-        self.dirname = None
         self.stats = ''
+        self.time = datetime.now().isoformat()
 
     def __repr__(self):
         return "{} ({})".format(self.name, self.branch)
@@ -29,11 +29,14 @@ class Task:
 
     def render(self):
         print("Rendering")
-        out = '{} ({})  <a href={}>stdout</a> <a href={}>stderr</a> <br>'.format(
-                self.name, self.branch, '/static/' + self.dirname + '/stdout.txt',
-                '/static/' + self.dirname + '/stderr.txt')
+        out = '{} ({})  <a href={}>output</a> <br>'.format(
+                self.name, self.branch, self.dirname + '/out.txt')
         out = out + self.stats
         return out
+
+    @property
+    def dirname(self):
+        return os.path.join('output', self.name, self.branch, self.time)
 
 
 template = """
@@ -69,18 +72,15 @@ def start_next():
 
 
     current_task = tasks.pop(0)
-    current_task.dirname = os.path.join('output', datetime.now().isoformat())
-    print(current_task.dirname)
     try:
         os.makedirs(current_task.dirname)
     except:
         pass
 
-    out = open(os.path.join(current_task.dirname, 'stdout.txt'), 'w')
-    err = open(os.path.join(current_task.dirname, 'stderr.txt'), 'w')
+    out = open(os.path.join(current_task.dirname, 'out.txt'), 'w')
     current_task.process = tornado.process.Subprocess(
         ['/bin/bash', 'run_test.sh', current_task.branch],
-        stderr=err, stdout=out)
+        stderr=out, stdout=out)
     current_task.process.set_exit_callback(on_done)
 
 
@@ -99,7 +99,7 @@ class MainHandler(tornado.web.RequestHandler):
         queued_str = ''.join( '<li>{}</li>'.format(task) for task in tasks)
 
         if current_task is not None:
-            self.write(template.format(current_task, queued_str, results_str))
+            self.write(template.format(current_task.render(), queued_str, results_str))
         else:
             self.write(template.format('None', queued_str, results_str))
 
@@ -119,12 +119,46 @@ class SubmitHandler(tornado.web.RequestHandler):
 
         return self.redirect('/', status=302)
 
+class FileHandler(tornado.web.RequestHandler):
+    def get(self, path):
+        print(path)
+        with open(os.path.join('output', path)) as f:
+            self.write("<pre>")
+            data = f.read()
+            print(data)
+            self.write(data)
+            self.write("</pre>")
+        self.set_header('Content-Type', 'text/html')
+
 
 if __name__ == "__main__":
+
+    # load previous
+    for name in os.listdir(os.path.join(dir_path, 'output')):
+        if not os.path.isdir(os.path.join(dir_path, 'output', name)):
+            continue
+
+        for branch in os.listdir(os.path.join(dir_path, 'output', name)):
+            if not os.path.isdir(os.path.join(dir_path, 'output', name, branch)):
+                continue
+
+            for t in os.listdir(os.path.join(dir_path, 'output', name, branch)):
+                if not os.path.isdir(os.path.join(dir_path, 'output', name, branch, t)):
+                    continue
+
+                old_task = Task(name, branch)
+                old_task.time = t
+                results.append(old_task)
+
+    results = sorted(results, key=lambda task: task.time)
+    print("Loaded: {}".format(results))
+
     app = tornado.web.Application([
         (r"/", MainHandler),
         (r"/submit", SubmitHandler),
-    ], autoreload=True, static_path=dir_path)
+        (r'/output/(.*)', FileHandler),
+
+    ], autoreload=True)
 
     app.listen(8888)
     tornado.ioloop.IOLoop.current().start()
