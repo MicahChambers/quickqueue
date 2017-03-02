@@ -2,10 +2,17 @@
 import os
 from datetime import datetime
 import subprocess
+import time
 
 import tornado.ioloop
 import tornado.web
+import tornado.websocket
 
+import socket
+
+IP = [(s.connect(('8.8.8.8', 53)), s.getsockname()[0], s.close())
+      for s in [socket.socket(socket.AF_INET, socket.SOCK_DGRAM)]][0][1]
+PORT = 8888
 dir_path = os.path.dirname(os.path.realpath(__file__))
 
 last_develop = ''
@@ -19,7 +26,7 @@ class Task:
         self.branch = branch
         self.stats = ''
         self.clean = clean
-        self.time = datetime.now().isoformat()
+        self.time = datetime.now().isoformat().replace(':', '-')
 
     def __repr__(self):
         return "{} ({})".format(self.name, self.branch)
@@ -28,8 +35,12 @@ class Task:
         return "{} ({})".format(self.name, self.branch)
 
     def render(self):
-        out = '{} ({})  <a href={}>output</a> <br>'.format(
-                self.name, self.branch, self.dirname + '/out.txt')
+        out = """
+        {name} ({branch})
+        <a href={dirname}/out.txt>output</a>
+        <a href=tail/{dirname}/out.txt>tail</a>
+        """.format(name=self.name, branch=self.branch, dirname=self.dirname)
+        #<a href=/tail/{dirname}/out.txt>tail</a> <br>
         out = out + self.stats
         return out
 
@@ -62,6 +73,53 @@ template = """
 
 </html>
 """
+
+tail_template = """
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Output</title>
+  <link href="//netdna.bootstrapcdn.com/twitter-bootstrap/2.3.1/css/bootstrap-combined.no-icons.min.css" rel="stylesheet">
+  <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/1.8.2/jquery.min.js"></script>
+</head>
+<body>
+  <div class="container">
+    <h1>tornado WebSocket example</h1>
+    <hr>
+      WebSocket status : <span id="message"></span>
+    <hr>
+    <pre>
+      <div id="content">
+      </div>
+    </pre>
+  </div>
+  <script>
+    var ws = new WebSocket('ws://%s:%i/log/%s');
+    var $message = $('#message');
+    var $content = $('#content');
+    ws.onopen = function(){
+      $message.attr("class", 'label label-success');
+      $message.text('open');
+    };
+    ws.onmessage = function(ev){
+      $message.attr("class", 'label label-info');
+      $message.hide();
+      $message.fadeIn("fast");
+      $message.text('received message');
+      $content.append(ev.data);
+    };
+    ws.onclose = function(ev){
+      $message.attr("class", 'label label-important');
+      $message.text(closed);
+    };
+    ws.onerror = function(ev){
+      $message.attr("class", 'label label-warning');
+      $message.text('error occurred');
+    };
+  </script>
+</body>
+"""
+
 
 def start_next():
     global current_task
@@ -122,14 +180,42 @@ class SubmitHandler(tornado.web.RequestHandler):
 
 class FileHandler(tornado.web.RequestHandler):
     def get(self, path):
-        print(path)
         with open(os.path.join('output', path)) as f:
-            self.write("<pre>")
             data = f.read()
-            print(data)
             self.write(data)
-            self.write("</pre>")
-        self.set_header('Content-Type', 'text/html')
+        self.set_header('Content-Type', 'application/octet-stream')
+
+class TailHandler(tornado.web.RequestHandler):
+
+    def get(self, path):
+        html = tail_template % (IP, PORT, path)
+        print(html)
+        self.write(html)
+
+
+class LogStreamer(tornado.websocket.WebSocketHandler):
+    def open(self, path):
+        print("Opening {}".format(path))
+        self.proc = tornado.process.Subprocess(
+            ["tail", "-f", path, "-n", "0"],
+            stdout=tornado.process.Subprocess.STREAM, bufsize=1)
+        self.proc.set_exit_callback(self._close)
+        self.proc.stdout.read_until("\n", self.write_line)
+        print("Exit")
+
+    def _close(self, *args, **kwargs):
+        print("closing")
+        self.close()
+
+    def on_close(self, *args, **kwargs):
+        print("trying to kill process")
+        self.proc.proc.terminate()
+        self.proc.proc.wait()
+
+    def write_line(self, data):
+        print("Returning to client: %s" % data.strip())
+        self.write_message(data.strip() + "<br/>")
+        self.proc.stdout.read_until("\n", self.write_line)
 
 
 if __name__ == "__main__":
@@ -162,9 +248,10 @@ if __name__ == "__main__":
     app = tornado.web.Application([
         (r"/", MainHandler),
         (r"/submit", SubmitHandler),
+        (r'/tail/(.*)', TailHandler),
+        (r'/log/(.*)', LogStreamer),
         (r'/output/(.*)', FileHandler),
-
-    ])
+    ], compress_response=True)
     #], autoreload=True)
 
     app.listen(8888)

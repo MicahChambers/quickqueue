@@ -22,17 +22,17 @@ fi
 catkin build --no-status --summarize --no-notify -DCRUISE_ENABLE_ASSERTIONS=ON
 source ~/.bashrc
 
-for xx in ~/cruise/ros/src/regression_testing/testsuites/{full,smoke,staging}/*.yaml; do
+for xx in ~/cruise/ros/src/perception_testing/testsuites/{full,smoke,staging}/*.yaml; do
     echo '----------------------------------------------------------'
     echo '----------------------------------------------------------'
     echo '----------------------------------------------------------'
     echo $xx
-    rosrun regression_testing perc.py -t $xx -d $2/${xx%.yaml}/
+    rosrun perception_testing perc.py -t $xx -d $2/${xx%.yaml}/
 done
 
 if [[ $comparedir == "" ]]; then
-    rosrun regression_testing multitest_stats  --input-dirs $outdir/*  -o $outdir/results.md
+    rosrun perception_testing multitest_stats  --input-dirs $outdir/*  -o $outdir/results.md
 else
-    rosrun regression_testing multitest_stats  --input-dirs $outdir/* --compare-dir $comparedir/* -o $outdir/results.md
+    rosrun perception_testing multitest_stats  --input-dirs $outdir/* --compare-dir $comparedir/* -o $outdir/results.md
 fi
 
