@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 import subprocess
 import time
+import traceback
 
 import tornado.ioloop
 import tornado.web
@@ -15,18 +16,32 @@ IP = [(s.connect(('8.8.8.8', 53)), s.getsockname()[0], s.close())
 PORT = 8888
 dir_path = os.path.dirname(os.path.realpath(__file__))
 
-last_develop = ''
 current_task = None
 tasks = []
 results = []
 
 class Task:
+
+    @staticmethod
+    def load(name, branch, time):
+        self = Task(name, branch, t)
+        self.stats = ''
+        self.time = t
+        self.read_stats()
+        return self
+
     def __init__(self, name, branch, clean=True):
         self.name = name
         self.branch = branch
         self.stats = ''
         self.clean = clean
         self.time = datetime.now().isoformat().replace(':', '-')
+        self.output = []
+        self.status = None
+        self.out_streams = []
+        self.compare_dir = ''
+        self.process = None
+        print(self.dirname)
 
     def __repr__(self):
         return "{} ({})".format(self.name, self.branch)
@@ -35,18 +50,61 @@ class Task:
         return "{} ({})".format(self.name, self.branch)
 
     def render(self):
-        out = """
-        {name} ({branch})
-        <a href={dirname}/out.txt>output</a>
-        <a href=tail/{dirname}/out.txt>tail</a>
-        """.format(name=self.name, branch=self.branch, dirname=self.dirname)
-        #<a href=/tail/{dirname}/out.txt>tail</a> <br>
-        out = out + self.stats
-        return out
+        if self.running:
+            out = """
+            <pre>{dirname}</pre>{name} ({branch})
+            <a href={dirname}/out.txt>output</a>
+            <a href=tail/{dirname}>tail</a>
+            <font color="red">{status}</font>
+            """.format(name=self.name, branch=self.branch, dirname=self.dirname,
+                       status=self.status)
+            #<a href=/tail/{dirname}/out.txt>tail</a> <br>
+            return out
+        else:
+            out = """
+            <pre>{dirname}</pre>{name} ({branch})
+            <a href={dirname}/out.txt>output</a>
+            <font color="red">{status}</font>
+            <pre>{stats}</pre>
+            """.format(name=self.name, branch=self.branch, dirname=self.dirname,
+                       status=self.status, stats=self.stats)
+            return out
+
+    def read_stats(self):
+        path = os.path.join(self.dirname, 'results.md')
+        print(path)
+        if os.path.exists(path):
+            with open(path) as f:
+                self.stats = f.read()
+            self.status = 'Done'
+        else:
+            self.status = 'Error'
+
+    @property
+    def running(self):
+        return self.process is not None
 
     @property
     def dirname(self):
         return os.path.join('output', self.name, self.branch, self.time)
+
+    def write_stderr(self, data):
+        self.process.stderr.read_until("\n", self.write_stderr)
+        self.write_line(data)
+
+    def write_stdout(self, data):
+        self.process.stdout.read_until("\n", self.write_stdout)
+        self.write_line(data)
+
+    def write_line(self, data):
+        data = data.strip()
+        self.output.append(data)
+        for stream in self.out_streams:
+            stream.write(data + '\n')
+        #print(data)
+        if data.startswith('cruise_PROGRESS: '):
+            print("New status: {}".format(self.status))
+            self.status = data[17:]
 
 
 template = """
@@ -57,6 +115,7 @@ template = """
 <form action="/submit" method="post" id="form1">
   Name: <input type="text" name="name">
   Branch: <input type="text" name="branch">
+  Compare: <input type="text" name="compare">
   Clean? <input type="checkbox" name="clean">
 </form>
 <button type="submit" form="form1" value="Submit">Submit</button>
@@ -84,10 +143,7 @@ tail_template = """
 </head>
 <body>
   <div class="container">
-    <h1>tornado WebSocket example</h1>
-    <hr>
-      WebSocket status : <span id="message"></span>
-    <hr>
+    <h1>Output</h1>
     <pre>
       <div id="content">
       </div>
@@ -106,7 +162,7 @@ tail_template = """
       $message.hide();
       $message.fadeIn("fast");
       $message.text('received message');
-      $content.append(ev.data);
+      $content.text(ev.data);
     };
     ws.onclose = function(ev){
       $message.attr("class", 'label label-important');
@@ -132,19 +188,42 @@ def start_next():
     try:
         os.makedirs(current_task.dirname)
     except:
-        pass
+        print(traceback.format_exc())
 
-    out = open(os.path.join(current_task.dirname, 'out.txt'), 'w')
     current_task.process = tornado.process.Subprocess(
         ['/bin/bash', 'run_test.sh', current_task.branch, current_task.dirname,
-         last_develop, str(current_task.clean)],
-        stderr=out, stdout=out)
+         current_task.compare_dir, str(current_task.clean)],
+        stderr=tornado.process.Subprocess.STREAM,
+        stdout=tornado.process.Subprocess.STREAM)
+
+    f = open(os.path.join(current_task.dirname, 'out.txt'), 'w')
+    current_task.out_streams.append(f)
     current_task.process.set_exit_callback(on_done)
+    current_task.process.stdout.read_until("\n", current_task.write_stdout)
+    current_task.process.stderr.read_until("\n", current_task.write_stderr)
+
+
+def kill():
+    global current_task
+    if current_task is not None:
+        print("trying to kill process")
+        current_task.process.terminate()
+        current_task.process.wait()
+        map(lambda x: x.close(), current_task.out_streams)
+        current_task.process = None
+
 
 def on_done(args):
     global current_task
-    print("Done with {} ({})".format(current_task.name, current_task.branch))
-    results.append(current_task)
+    try:
+        print("Done with {} ({})".format(current_task.name, current_task.branch))
+        map(lambda x: x.close(), current_task.out_streams)
+        current_task.process = None
+        results.append(current_task)
+        current_task.read_stats()
+    except Exception:
+        print(traceback.format_exc())
+
     current_task = None
     start_next()
 
@@ -152,7 +231,6 @@ def on_done(args):
 class MainHandler(tornado.web.RequestHandler):
     def get(self):
         global current_task
-        print('Last Develop: {}'.format(last_develop))
         results_str = ''.join( '<li>{}</li>'.format(task.render()) for task in reversed(results))
         queued_str = ''.join( '<li>{}</li>'.format(task) for task in tasks)
 
@@ -166,11 +244,16 @@ class SubmitHandler(tornado.web.RequestHandler):
     def post(self):
         global current_task
         request = self.request.arguments
-        if 'branch' not in request or 'name' not in request:
+        if (    'branch' not in request or
+                'name' not in request or
+                'compare' not in request):
             raise tornado.web.HTTPError(400)
 
         clean = 'clean' in request
         task = Task(request['name'][0], request['branch'][0], clean)
+        task.status = 'Starting'
+        if request['compare'][0] != '':
+            task.compare_dir = request['compare'][0]
         tasks.append(task)
 
         if current_task is None:
@@ -195,27 +278,25 @@ class TailHandler(tornado.web.RequestHandler):
 
 class LogStreamer(tornado.websocket.WebSocketHandler):
     def open(self, path):
-        print("Opening {}".format(path))
-        self.proc = tornado.process.Subprocess(
-            ["tail", "-f", path, "-n", "0"],
-            stdout=tornado.process.Subprocess.STREAM, bufsize=1)
-        self.proc.set_exit_callback(self._close)
-        self.proc.stdout.read_until("\n", self.write_line)
-        print("Exit")
-
-    def _close(self, *args, **kwargs):
-        print("closing")
-        self.close()
+        print("Log streaming:", path)
+        global current_task
+        self.task = None
+        print(current_task.dirname)
+        if current_task.dirname == path:
+            self.task = current_task
+            print("Opening {}".format(path))
+            current_task.out_streams.append(self)
+            self.buff = []
 
     def on_close(self, *args, **kwargs):
-        print("trying to kill process")
-        self.proc.proc.terminate()
-        self.proc.proc.wait()
+        if self.task is not None:
+            self.task.out_streams.remove(self)
 
-    def write_line(self, data):
-        print("Returning to client: %s" % data.strip())
-        self.write_message(data.strip() + "<br/>")
-        self.proc.stdout.read_until("\n", self.write_line)
+    def write(self, data):
+        data = data.strip()
+        self.buff.append(data)
+        self.buff = self.buff[-50:]
+        self.write_message('\n'.join(self.buff))
 
 
 if __name__ == "__main__":
@@ -233,16 +314,10 @@ if __name__ == "__main__":
                 if not os.path.isdir(os.path.join(dir_path, 'output', name, branch, t)):
                     continue
 
-                old_task = Task(name, branch)
-                old_task.time = t
+                old_task = Task.load(name, branch, t)
                 results.append(old_task)
 
     results = sorted(results, key=lambda task: task.time)
-    for result in reversed(results):
-        if result.branch == 'develop':
-            last_develop = result.dirname
-            break
-
     print("Loaded: {}".format(results))
 
     app = tornado.web.Application([
